@@ -1,5 +1,23 @@
 import jwt from 'jsonwebtoken';
 
+export const optionalAuth = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return next();
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  try {
+    req.user = jwt.verify(token, process.env.JWT_SECRET);
+  } catch (error) {
+    req.user = undefined;
+  }
+
+  next();
+};
+
 export const requireAuth = (req, res, next) => {
   const authHeader = req.headers.authorization;
 
