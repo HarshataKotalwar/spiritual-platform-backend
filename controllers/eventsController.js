@@ -6,6 +6,12 @@ import {
   sameNullableText,
   sameTime,
 } from '../utils/scheduleTime.js';
+import {
+  notifyEventCancelled,
+  notifyEventPublished,
+  notifyEventRegistration,
+  notifyEventUpdated,
+} from '../services/notifications/hooks.js';
 
 export const getEvents = async (req, res) => {
   try {
@@ -384,9 +390,15 @@ export const createEvent = async (req, res) => {
       ]
     );
 
+    const event = result.rows[0];
+
+    if (event.status === 'published') {
+      await notifyEventPublished({ id: event.id, title: event.title });
+    }
+
     res.status(201).json({
       message: 'Event created successfully.',
-      event: result.rows[0],
+      event,
     });
   } catch (error) {
     console.error('Create event error:', error);
@@ -520,6 +532,20 @@ export const updateEvent = async (req, res) => {
       }
     }
 
+    const meaningfulUpdate =
+      current.status === 'published' &&
+      status === 'published' &&
+      (
+        current.title !== title ||
+        !sameNullableText(current.description, description) ||
+        current.event_type !== event_type ||
+        !sameDate(current.event_date, event_date) ||
+        !sameTime(current.start_time, start_time) ||
+        Number(current.duration_minutes) !== Number(duration_minutes) ||
+        !sameNullableText(current.location, location) ||
+        !sameNullableText(current.meeting_url, meeting_url)
+      );
+
     const result = await pool.query(
       `
       UPDATE events
@@ -557,9 +583,19 @@ export const updateEvent = async (req, res) => {
       ]
     );
 
+    const event = result.rows[0];
+
+    if (current.status !== 'published' && event.status === 'published') {
+      await notifyEventPublished({ id: event.id, title: event.title });
+    } else if (current.status !== 'cancelled' && event.status === 'cancelled') {
+      await notifyEventCancelled({ id: event.id, title: event.title });
+    } else if (meaningfulUpdate) {
+      await notifyEventUpdated({ id: event.id, title: event.title });
+    }
+
     res.status(200).json({
       message: 'Event updated successfully.',
-      event: result.rows[0],
+      event,
     });
   } catch (error) {
     console.error('Update event error:', error);
@@ -594,6 +630,8 @@ export const cancelEvent = async (req, res) => {
         error: 'Event not found.',
       });
     }
+
+    await notifyEventCancelled(result.rows[0]);
 
     res.status(200).json({
       message: 'Event cancelled successfully.',
@@ -653,7 +691,7 @@ export const registerForEvent = async (req, res) => {
 
     const eventResult = await client.query(
       `
-      SELECT id, capacity, status
+      SELECT id, title, capacity, status
       FROM events
       WHERE id = $1
       FOR UPDATE
@@ -721,6 +759,8 @@ export const registerForEvent = async (req, res) => {
     );
 
     await client.query('COMMIT');
+
+    await notifyEventRegistration(event, userId);
 
     res.status(201).json({
       message: 'Successfully registered for the event.',

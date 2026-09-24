@@ -1,4 +1,5 @@
 import pool from '../db.js';
+import { notifyEventCertificate } from '../services/notifications/hooks.js';
 
 const parsePositiveInt = (value) => {
   const parsed = Number(value);
@@ -544,6 +545,16 @@ export const issueEventCertificate = async (req, res) => {
 
     await client.query('COMMIT');
 
+    if (issued.created) {
+      const event = await pool.query(
+        `SELECT id, title FROM events WHERE id = $1`,
+        [eventId]
+      );
+      if (event.rows[0]) {
+        await notifyEventCertificate(event.rows[0], userId);
+      }
+    }
+
     res.status(issued.created ? 201 : 200).json({
       message: issued.created
         ? 'Certificate issued.'
@@ -623,6 +634,18 @@ export const issueEligibleEventCertificates = async (req, res) => {
     }
 
     await client.query('COMMIT');
+
+    if (issued.length > 0) {
+      const event = await pool.query(
+        `SELECT id, title FROM events WHERE id = $1`,
+        [eventId]
+      );
+      if (event.rows[0]) {
+        for (const certificate of issued) {
+          await notifyEventCertificate(event.rows[0], certificate.user_id);
+        }
+      }
+    }
 
     res.status(200).json({
       message: issued.length

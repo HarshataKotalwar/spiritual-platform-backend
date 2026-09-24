@@ -1,5 +1,6 @@
 import pool from '../db.js';
 import { upload, getFileUrl } from '../utils/storage.js';
+import { notifyMeditationPublished } from '../services/notifications/hooks.js';
 
 export const getCategories = async (req, res) => {
   try {
@@ -61,7 +62,10 @@ export const uploadMeditation = async (req, res) => {
         [title, description || null, categoryId || null, mediaType, mediaUrl, durationSeconds, userId]
       );
   
-      res.status(201).json({ meditation: result.rows[0] });
+      const meditation = result.rows[0];
+      await notifyMeditationPublished(meditation);
+
+      res.status(201).json({ meditation });
     } catch (error) {
       console.error('Upload meditation error:', error);
       res.status(500).json({ error: 'Something went wrong. Please try again.' });

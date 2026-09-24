@@ -8,6 +8,7 @@ import {
   publicOpportunity,
   certificateStatusFor,
 } from './volunteerHelpers.js';
+import { notifyVolunteeringApplicationSubmitted } from '../services/notifications/hooks.js';
 
 export const listOpportunities = async (req, res) => {
   try {
@@ -160,7 +161,7 @@ export const applyToOpportunity = async (req, res) => {
 
     const opportunityResult = await client.query(
       `
-      SELECT id, status, capacity
+      SELECT id, title, status, capacity
       FROM volunteer_opportunities
       WHERE id = $1
       FOR UPDATE
@@ -221,6 +222,8 @@ export const applyToOpportunity = async (req, res) => {
     );
 
     await client.query('COMMIT');
+
+    await notifyVolunteeringApplicationSubmitted(opportunity, userId);
 
     res.status(201).json({
       message: 'Your application has been submitted.',

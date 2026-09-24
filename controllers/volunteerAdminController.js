@@ -12,6 +12,13 @@ import {
   isOpportunityCoreLocked,
   opportunityCoreFieldsChanged,
 } from './volunteerHelpers.js';
+import {
+  notifyVolunteeringApplicationReviewed,
+  notifyVolunteeringCancelled,
+  notifyVolunteeringCompleted,
+  notifyVolunteeringPublished,
+  notifyVolunteeringUpdated,
+} from '../services/notifications/hooks.js';
 
 const setOpportunityStatus = async (req, res, nextStatus, message) => {
   try {
@@ -20,6 +27,17 @@ const setOpportunityStatus = async (req, res, nextStatus, message) => {
     if (!opportunityId) {
       return res.status(400).json({ error: 'Invalid opportunity.' });
     }
+
+    const existing = await pool.query(
+      `SELECT ${opportunityReturning} FROM volunteer_opportunities WHERE id = $1`,
+      [opportunityId]
+    );
+
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: 'Opportunity not found.' });
+    }
+
+    const previous = existing.rows[0];
 
     const result = await pool.query(
       `
@@ -31,13 +49,30 @@ const setOpportunityStatus = async (req, res, nextStatus, message) => {
       [opportunityId, nextStatus]
     );
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Opportunity not found.' });
+    const opportunity = result.rows[0];
+
+    if (previous.status !== 'published' && opportunity.status === 'published') {
+      await notifyVolunteeringPublished(opportunity);
+    } else if (previous.status !== 'cancelled' && opportunity.status === 'cancelled') {
+      await notifyVolunteeringCancelled(opportunity);
+    } else if (previous.status !== 'completed' && opportunity.status === 'completed') {
+      const volunteers = await pool.query(
+        `
+        SELECT user_id
+        FROM volunteer_applications
+        WHERE opportunity_id = $1 AND status IN ('approved', 'completed')
+        `,
+        [opportunity.id]
+      );
+      await notifyVolunteeringCompleted(
+        opportunity,
+        volunteers.rows.map((row) => row.user_id)
+      );
     }
 
     res.status(200).json({
       message,
-      opportunity: result.rows[0],
+      opportunity,
     });
   } catch (error) {
     console.error('Update volunteering status error:', error);
@@ -156,9 +191,15 @@ export const createOpportunity = async (req, res) => {
       ]
     );
 
+    const opportunity = result.rows[0];
+
+    if (opportunity.status === 'published') {
+      await notifyVolunteeringPublished(opportunity);
+    }
+
     res.status(201).json({
       message: 'Opportunity created.',
-      opportunity: result.rows[0],
+      opportunity,
     });
   } catch (error) {
     console.error('Create volunteering opportunity error:', error);
@@ -255,13 +296,36 @@ export const updateOpportunity = async (req, res) => {
       ]
     );
 
-    if (result.rows.length === 0) {
+    const opportunity = result.rows[0];
+
+    if (!opportunity) {
       return res.status(404).json({ error: 'Opportunity not found.' });
+    }
+
+    const becamePublished =
+      current.status !== 'published' && opportunity.status === 'published';
+    const becameCancelled =
+      current.status !== 'cancelled' && opportunity.status === 'cancelled';
+    const meaningfulUpdate =
+      current.status === 'published' &&
+      opportunity.status === 'published' &&
+      (
+        current.title !== data.title ||
+        current.description !== data.description ||
+        opportunityCoreFieldsChanged(current, data)
+      );
+
+    if (becamePublished) {
+      await notifyVolunteeringPublished(opportunity);
+    } else if (becameCancelled) {
+      await notifyVolunteeringCancelled(opportunity);
+    } else if (meaningfulUpdate) {
+      await notifyVolunteeringUpdated(opportunity);
     }
 
     res.status(200).json({
       message: 'Opportunity updated.',
-      opportunity: result.rows[0],
+      opportunity,
     });
   } catch (error) {
     console.error('Update volunteering opportunity error:', error);
@@ -512,6 +576,20 @@ const reviewApplication = async (req, res, nextStatus, message) => {
 
     await client.query('COMMIT');
 
+    if (nextStatus === 'approved' || nextStatus === 'rejected') {
+      const opportunity = await pool.query(
+        `SELECT id, title FROM volunteer_opportunities WHERE id = $1`,
+        [application.opportunity_id]
+      );
+      if (opportunity.rows[0]) {
+        await notifyVolunteeringApplicationReviewed(
+          opportunity.rows[0],
+          application.user_id,
+          nextStatus === 'approved'
+        );
+      }
+    }
+
     res.status(200).json({
       message,
       application: updated.rows[0],
@@ -601,6 +679,14 @@ export const completeApplication = async (req, res) => {
     );
 
     await client.query('COMMIT');
+
+    const opportunity = await pool.query(
+      `SELECT id, title FROM volunteer_opportunities WHERE id = $1`,
+      [application.opportunity_id]
+    );
+    if (opportunity.rows[0]) {
+      await notifyVolunteeringCompleted(opportunity.rows[0], [application.user_id]);
+    }
 
     res.status(200).json({
       message: 'Volunteer marked completed.',

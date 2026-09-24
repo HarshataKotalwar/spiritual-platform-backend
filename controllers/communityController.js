@@ -1,5 +1,9 @@
 import pool from '../db.js';
 import { getStoredImageUrl } from '../utils/storage.js';
+import {
+  notifyCommunityAnswered,
+  notifyCommunityComment,
+} from '../services/notifications/hooks.js';
 
 const TITLE_MAX = 200;
 const CONTENT_MAX = 5000;
@@ -460,7 +464,7 @@ export const createReply = async (req, res) => {
 
     const question = await pool.query(
       `
-      SELECT q.id, q.group_id
+      SELECT q.id, q.group_id, q.user_id, q.title
       FROM community_questions q
       JOIN community_groups g ON g.id = q.group_id
       WHERE q.id = $1 AND g.status = 'active' AND q.status = 'active'
@@ -477,10 +481,12 @@ export const createReply = async (req, res) => {
       return res.status(403).json({ error: 'Join this community to participate.' });
     }
 
+    let parentAuthorId = null;
+
     if (parentId) {
       const parent = await pool.query(
         `
-        SELECT id
+        SELECT id, user_id
         FROM community_replies
         WHERE id = $1 AND question_id = $2 AND status = 'active' AND parent_id IS NULL
         `,
@@ -490,6 +496,8 @@ export const createReply = async (req, res) => {
       if (parent.rows.length === 0) {
         return res.status(400).json({ error: 'That answer is not available to discuss.' });
       }
+
+      parentAuthorId = parent.rows[0].user_id;
     }
 
     const result = await pool.query(
@@ -505,6 +513,16 @@ export const createReply = async (req, res) => {
       `SELECT id, name, role FROM users WHERE id = $1`,
       [userId]
     );
+
+    if (parentId) {
+      await notifyCommunityComment({
+        question: question.rows[0],
+        parentAuthorId,
+        actorUserId: userId,
+      });
+    } else {
+      await notifyCommunityAnswered(question.rows[0], userId);
+    }
 
     res.status(201).json({
       message: parentId ? 'Your comment has been shared.' : 'Your answer has been shared.',

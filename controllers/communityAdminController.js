@@ -1,4 +1,5 @@
 import pool from '../db.js';
+import { notifyCommunityModeration } from '../services/notifications/hooks.js';
 
 const parseId = (value) => {
   const id = Number(value);
@@ -179,7 +180,7 @@ export const adminRemoveQuestion = async (req, res) => {
       UPDATE community_questions
       SET status = 'removed', updated_at = NOW()
       WHERE id = $1
-      RETURNING id, status
+      RETURNING id, status, user_id, title
       `,
       [questionId]
     );
@@ -188,9 +189,16 @@ export const adminRemoveQuestion = async (req, res) => {
       return res.status(404).json({ error: 'Question not found.' });
     }
 
+    const question = result.rows[0];
+    await notifyCommunityModeration(
+      question.user_id,
+      `Your discussion “${question.title}” was removed by a moderator.`,
+      question.id
+    );
+
     res.status(200).json({
       message: 'Question removed.',
-      question: result.rows[0],
+      question: { id: question.id, status: question.status },
     });
   } catch (error) {
     console.error('Admin remove question error:', error);
@@ -291,7 +299,7 @@ export const adminRemoveReply = async (req, res) => {
       UPDATE community_replies
       SET status = 'removed', updated_at = NOW()
       WHERE id = $1
-      RETURNING id, status
+      RETURNING id, status, user_id, question_id
       `,
       [replyId]
     );
@@ -300,9 +308,16 @@ export const adminRemoveReply = async (req, res) => {
       return res.status(404).json({ error: 'Reply not found.' });
     }
 
+    const reply = result.rows[0];
+    await notifyCommunityModeration(
+      reply.user_id,
+      'A moderator removed one of your community replies.',
+      reply.question_id
+    );
+
     res.status(200).json({
       message: 'Reply removed.',
-      reply: result.rows[0],
+      reply: { id: reply.id, status: reply.status },
     });
   } catch (error) {
     console.error('Admin remove reply error:', error);
